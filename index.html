@@ -105,7 +105,7 @@
     .arr { font-size: 8px; transition: transform 0.2s; display: inline-block; }
     .date-group.open .arr { transform: rotate(90deg); }
     .rpt-list { max-height: 0; overflow: hidden; transition: max-height 0.25s ease; }
-    .date-group.open .rpt-list { max-height: 200px; }
+    .date-group.open .rpt-list { max-height: 400px; }
     .rpt-btn {
       display: block; width: 100%; padding: 5px 14px 5px 26px;
       background: none; border: none; border-left: 2px solid transparent;
@@ -114,6 +114,17 @@
     }
     .rpt-btn:hover { background: var(--bg-hover); color: var(--text); }
     .rpt-btn.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-bg); }
+    .rpt-row { display: flex; align-items: center; padding: 5px 14px 5px 26px; }
+    .rpt-label { flex: 1; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lang-btns { display: flex; gap: 3px; flex-shrink: 0; }
+    .lang-btn {
+      background: none; border: 1px solid var(--dim); color: var(--dim);
+      padding: 1px 5px; border-radius: 3px; cursor: pointer;
+      font-family: inherit; font-size: 9px; letter-spacing: 0.06em;
+      transition: border-color 0.1s, color 0.1s;
+    }
+    .lang-btn:hover { border-color: var(--muted); color: var(--muted); }
+    .lang-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 
     /* ── Content ── */
     #cwrap { flex: 1; overflow-y: auto; }
@@ -250,11 +261,16 @@ function renderMarkdown(raw) {
 }
 
 const LABELS = {
-  'ai-cli':      'AI CLI 工具',
-  'ai-agents':   'AI Agents 生态',
-  'ai-web':      'OpenAI & Anthropic 官网动态',
-  'ai-trending': 'GitHub AI 趋势',
-  'ai-hn':       'HN 社区动态',
+  'ai-cli':          'AI CLI 工具',
+  'ai-cli-en':       'AI CLI Tools',
+  'ai-agents':       'AI Agents 生态',
+  'ai-agents-en':    'AI Agents Ecosystem',
+  'ai-web':          'OpenAI & Anthropic 官网动态',
+  'ai-web-en':       'OpenAI & Anthropic Updates',
+  'ai-trending':     'GitHub AI 趋势',
+  'ai-trending-en':  'GitHub AI Trends',
+  'ai-hn':           'HN 社区动态',
+  'ai-hn-en':        'HN Community Digest',
 };
 
 // ── Theme ──
@@ -293,8 +309,11 @@ async function loadReport(date, report, push = true) {
 
   // Sync sidebar
   document.querySelectorAll('.rpt-btn').forEach(b => b.classList.toggle('active', b.dataset.key === key));
+  document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.key === key));
   document.querySelectorAll('.date-hdr').forEach(h => {
-    h.classList.toggle('lit', !!h.closest('.date-group').querySelector('.rpt-btn.active'));
+    const grp = h.closest('.date-group');
+    const hasActive = grp.querySelector('.rpt-btn.active') || grp.querySelector('.lang-btn.active');
+    h.classList.toggle('lit', !!hasActive);
   });
   document.querySelectorAll('.date-group').forEach(g => {
     if (g.dataset.date === date) g.classList.add('open');
@@ -337,13 +356,51 @@ function buildNav(dates) {
 
     const list = document.createElement('div');
     list.className = 'rpt-list';
-    reports.forEach(r => {
-      const btn = document.createElement('button');
-      btn.className = 'rpt-btn';
-      btn.dataset.key = `${date}/${r}`;
-      btn.textContent = LABELS[r] || r;
-      btn.onclick = () => loadReport(date, r);
-      list.appendChild(btn);
+
+    // Filter out -en reports from base list, process as pairs
+    const baseReports = reports.filter(r => !r.endsWith('-en'));
+    baseReports.forEach(r => {
+      const enKey = r + '-en';
+      const hasEn = reports.includes(enKey);
+
+      if (hasEn) {
+        // Render as a row with label + [ZH][EN] buttons
+        const row = document.createElement('div');
+        row.className = 'rpt-row';
+
+        const label = document.createElement('span');
+        label.className = 'rpt-label';
+        const baseLabel = LABELS[r] || r;
+        label.textContent = baseLabel;
+        label.title = baseLabel;
+
+        const btns = document.createElement('div');
+        btns.className = 'lang-btns';
+
+        const zhBtn = document.createElement('button');
+        zhBtn.className = 'lang-btn';
+        zhBtn.dataset.key = `${date}/${r}`;
+        zhBtn.textContent = 'ZH';
+        zhBtn.onclick = () => loadReport(date, r);
+
+        const enBtn = document.createElement('button');
+        enBtn.className = 'lang-btn';
+        enBtn.dataset.key = `${date}/${enKey}`;
+        enBtn.textContent = 'EN';
+        enBtn.onclick = () => loadReport(date, enKey);
+
+        btns.append(zhBtn, enBtn);
+        row.append(label, btns);
+        list.appendChild(row);
+      } else {
+        // No EN variant — render as current single button
+        const btn = document.createElement('button');
+        btn.className = 'rpt-btn';
+        btn.dataset.key = `${date}/${r}`;
+        btn.textContent = LABELS[r] || r;
+        btn.onclick = () => loadReport(date, r);
+        list.appendChild(btn);
+      }
     });
 
     grp.append(hdr, list);

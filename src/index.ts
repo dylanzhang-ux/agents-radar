@@ -170,6 +170,7 @@ async function generateSummaries(
   fetchedPeers: RepoFetch[],
   trendingData: TrendingData,
   dateStr: string,
+  lang: "zh" | "en" = "zh",
 ): Promise<{
   cliDigests: RepoDigest[];
   openclawSummary: string;
@@ -177,21 +178,30 @@ async function generateSummaries(
   peerDigests: RepoDigest[];
   trendingSummary: string;
 }> {
+  const noActivity = lang === "en" ? "No activity in the last 24 hours." : "过去24小时无活动。";
+  const summaryFailed = lang === "en" ? "⚠️ Summary generation failed." : "⚠️ 摘要生成失败。";
+  const skillsFailed = lang === "en" ? "⚠️ Skills summary generation failed." : "⚠️ Skills 摘要生成失败。";
+  const trendingNoData =
+    lang === "en"
+      ? "⚠️ Trending data unavailable, unable to generate report."
+      : "⚠️ 今日趋势数据获取失败，无法生成报告。";
+  const trendingFailed = lang === "en" ? "⚠️ Trending report generation failed." : "⚠️ 趋势报告生成失败。";
+
   const [cliDigests, openclawSummary, skillsSummary, peerDigests, trendingSummary] = await Promise.all([
     Promise.all(
       fetchedCli.map(async ({ cfg, issues, prs, releases }): Promise<RepoDigest> => {
         const hasData = issues.length || prs.length || releases.length;
         if (!hasData) {
           console.log(`  [${cfg.id}] No activity, skipping LLM call`);
-          return { config: cfg, issues, prs, releases, summary: "过去24小时无活动。" };
+          return { config: cfg, issues, prs, releases, summary: noActivity };
         }
         console.log(`  [${cfg.id}] Calling LLM for summary...`);
         try {
-          const summary = await callLlm(buildCliPrompt(cfg, issues, prs, releases, dateStr));
+          const summary = await callLlm(buildCliPrompt(cfg, issues, prs, releases, dateStr, lang));
           return { config: cfg, issues, prs, releases, summary };
         } catch (err) {
           console.error(`  [${cfg.id}] LLM call failed: ${err}`);
-          return { config: cfg, issues, prs, releases, summary: "⚠️ 摘要生成失败。" };
+          return { config: cfg, issues, prs, releases, summary: summaryFailed };
         }
       }),
     ),
@@ -200,23 +210,23 @@ async function generateSummaries(
       const hasData = issues.length || prs.length || releases.length;
       if (!hasData) {
         console.log(`  [openclaw] No activity, skipping LLM call`);
-        return "过去24小时无活动。";
+        return noActivity;
       }
       console.log(`  [openclaw] Calling LLM for OpenClaw report...`);
       try {
-        return await callLlm(buildPeerPrompt(cfg, issues, prs, releases, dateStr, 50, 30));
+        return await callLlm(buildPeerPrompt(cfg, issues, prs, releases, dateStr, 50, 30, lang));
       } catch (err) {
         console.error(`  [openclaw] LLM call failed: ${err}`);
-        return "⚠️ 摘要生成失败。";
+        return summaryFailed;
       }
     })(),
     (async () => {
       console.log("  [claude-code-skills] Calling LLM for skills report...");
       try {
-        return await callLlm(buildSkillsPrompt(skillsData.prs, skillsData.issues, dateStr));
+        return await callLlm(buildSkillsPrompt(skillsData.prs, skillsData.issues, dateStr, lang));
       } catch (err) {
         console.error(`  [claude-code-skills] LLM call failed: ${err}`);
-        return "⚠️ Skills 摘要生成失败。";
+        return skillsFailed;
       }
     })(),
     Promise.all(
@@ -224,7 +234,7 @@ async function generateSummaries(
         const hasData = issues.length || prs.length || releases.length;
         if (!hasData) {
           console.log(`  [${cfg.id}] No activity, skipping LLM call`);
-          return { config: cfg, issues, prs, releases, summary: "过去24小时无活动。" };
+          return { config: cfg, issues, prs, releases, summary: noActivity };
         }
         console.log(`  [${cfg.id}] Calling LLM for peer summary...`);
         try {
@@ -233,23 +243,25 @@ async function generateSummaries(
             issues,
             prs,
             releases,
-            summary: await callLlm(buildPeerPrompt(cfg, issues, prs, releases, dateStr)),
+            summary: await callLlm(
+              buildPeerPrompt(cfg, issues, prs, releases, dateStr, undefined, undefined, lang),
+            ),
           };
         } catch (err) {
           console.error(`  [${cfg.id}] LLM call failed: ${err}`);
-          return { config: cfg, issues, prs, releases, summary: "⚠️ 摘要生成失败。" };
+          return { config: cfg, issues, prs, releases, summary: summaryFailed };
         }
       }),
     ),
     (async () => {
       const hasData = trendingData.trendingRepos.length > 0 || trendingData.searchRepos.length > 0;
-      if (!hasData) return "⚠️ 今日趋势数据获取失败，无法生成报告。";
+      if (!hasData) return trendingNoData;
       console.log("  [trending] Calling LLM for trending report...");
       try {
-        return await callLlm(buildTrendingPrompt(trendingData, dateStr), 6144);
+        return await callLlm(buildTrendingPrompt(trendingData, dateStr, lang), 6144);
       } catch (err) {
         console.error(`  [trending] LLM call failed: ${err}`);
-        return "⚠️ 趋势报告生成失败。";
+        return trendingFailed;
       }
     })(),
   ]);
@@ -268,17 +280,20 @@ function buildCliReportContent(
   utcStr: string,
   dateStr: string,
   footer: string,
+  lang: "zh" | "en" = "zh",
 ): string {
   const repoLinks =
     cliDigests.map((d) => `- [${d.config.name}](https://github.com/${d.config.repo})`).join("\n") +
     `\n- [Claude Code Skills](https://github.com/${CLAUDE_SKILLS_REPO})`;
 
+  const skillsHeading =
+    lang === "en"
+      ? `## Claude Code Skills Highlights\n\n> Source: [anthropics/skills](https://github.com/${CLAUDE_SKILLS_REPO})\n\n${skillsSummary}\n\n---\n\n`
+      : `## Claude Code Skills 社区热点\n\n> 数据来源: [anthropics/skills](https://github.com/${CLAUDE_SKILLS_REPO})\n\n${skillsSummary}\n\n---\n\n`;
+
   const toolSections = cliDigests
     .map((d) => {
-      const skillsSection =
-        d.config.id === "claude-code"
-          ? `## Claude Code Skills 社区热点\n\n> 数据来源: [anthropics/skills](https://github.com/${CLAUDE_SKILLS_REPO})\n\n${skillsSummary}\n\n---\n\n`
-          : "";
+      const skillsSection = d.config.id === "claude-code" ? skillsHeading : "";
       return [
         `<details>`,
         `<summary><strong>${d.config.name}</strong> — <a href="https://github.com/${d.config.repo}">${d.config.repo}</a></summary>`,
@@ -290,18 +305,18 @@ function buildCliReportContent(
     })
     .join("\n\n");
 
-  return (
-    `# AI CLI 工具社区动态日报 ${dateStr}\n\n` +
-    `> 生成时间: ${utcStr} UTC | 覆盖工具: ${cliDigests.length} 个\n\n` +
-    `${repoLinks}\n\n` +
-    `---\n\n` +
-    `## 横向对比\n\n` +
-    comparison +
-    `\n\n---\n\n` +
-    `## 各工具详细报告\n\n` +
-    toolSections +
-    footer
-  );
+  const title =
+    lang === "en"
+      ? `# AI CLI Tools Community Digest ${dateStr}\n\n`
+      : `# AI CLI 工具社区动态日报 ${dateStr}\n\n`;
+  const meta =
+    lang === "en"
+      ? `> Generated: ${utcStr} UTC | Tools covered: ${cliDigests.length}\n\n`
+      : `> 生成时间: ${utcStr} UTC | 覆盖工具: ${cliDigests.length} 个\n\n`;
+  const comparisonHeading = lang === "en" ? `## Cross-Tool Comparison\n\n` : `## 横向对比\n\n`;
+  const detailHeading = lang === "en" ? `## Per-Tool Reports\n\n` : `## 各工具详细报告\n\n`;
+
+  return title + meta + `${repoLinks}\n\n` + `---\n\n` + comparisonHeading + comparison + `\n\n---\n\n` + detailHeading + toolSections + footer;
 }
 
 function buildOpenclawReportContent(
@@ -312,6 +327,7 @@ function buildOpenclawReportContent(
   utcStr: string,
   dateStr: string,
   footer: string,
+  lang: "zh" | "en" = "zh",
 ): string {
   const { issues, prs } = fetchedOpenclaw;
 
@@ -332,18 +348,30 @@ function buildOpenclawReportContent(
     )
     .join("\n\n");
 
+  const title =
+    lang === "en"
+      ? `# OpenClaw Ecosystem Digest ${dateStr}\n\n`
+      : `# OpenClaw 生态日报 ${dateStr}\n\n`;
+  const meta =
+    lang === "en"
+      ? `> Issues: ${issues.length} | PRs: ${prs.length} | Projects covered: ${1 + OPENCLAW_PEERS.length} | Generated: ${utcStr} UTC\n\n`
+      : `> Issues: ${issues.length} | PRs: ${prs.length} | 覆盖项目: ${1 + OPENCLAW_PEERS.length} 个 | 生成时间: ${utcStr} UTC\n\n`;
+  const deepDiveHeading = lang === "en" ? `## OpenClaw Deep Dive\n\n` : `## OpenClaw 项目深度报告\n\n`;
+  const comparisonHeading = lang === "en" ? `## Cross-Ecosystem Comparison\n\n` : `## 横向生态对比\n\n`;
+  const peerHeading = lang === "en" ? `## Peer Project Reports\n\n` : `## 同赛道项目详细报告\n\n`;
+
   return (
-    `# OpenClaw 生态日报 ${dateStr}\n\n` +
-    `> Issues: ${issues.length} | PRs: ${prs.length} | 覆盖项目: ${1 + OPENCLAW_PEERS.length} 个 | 生成时间: ${utcStr} UTC\n\n` +
+    title +
+    meta +
     `${peersRepoLinks}\n\n` +
     `---\n\n` +
-    `## OpenClaw 项目深度报告\n\n` +
+    deepDiveHeading +
     openclawSummary +
     `\n\n---\n\n` +
-    `## 横向生态对比\n\n` +
+    comparisonHeading +
     peersComparison +
     `\n\n---\n\n` +
-    `## 同赛道项目详细报告\n\n` +
+    peerHeading +
     peerDetailSections +
     footer
   );
@@ -360,34 +388,56 @@ async function saveWebReport(
   dateStr: string,
   digestRepo: string,
   footer: string,
+  lang: "zh" | "en" = "zh",
 ): Promise<void> {
   const hasNewContent = webResults.some((r) => r.newItems.length > 0);
 
   if (hasNewContent) {
-    console.log("  [web] Calling LLM for web content report...");
+    console.log(`  [web/${lang}] Calling LLM for web content report...`);
     try {
-      const webSummary = await callLlm(buildWebReportPrompt(webResults, dateStr), 8192);
+      const webSummary = await callLlm(buildWebReportPrompt(webResults, dateStr, lang), 8192);
       const isFirstRun = webResults.some((r) => r.isFirstRun);
-      const mode = isFirstRun ? "首次全量" : "今日更新";
       const totalNew = webResults.reduce((sum, r) => sum + r.newItems.length, 0);
 
-      const webContent =
-        `# AI 官方内容追踪报告 ${dateStr}\n\n` +
-        `> ${mode} | 新增内容: ${totalNew} 篇 | 生成时间: ${utcStr} UTC\n\n` +
-        `数据来源:\n` +
-        `- Anthropic: [anthropic.com](https://www.anthropic.com) — ` +
-        `新增 ${webResults.find((r) => r.site === "anthropic")?.newItems.length ?? 0} 篇` +
-        `（sitemap 共 ${webResults.find((r) => r.site === "anthropic")?.totalDiscovered ?? 0} 条）\n` +
-        `- OpenAI: [openai.com](https://openai.com) — ` +
-        `新增 ${webResults.find((r) => r.site === "openai")?.newItems.length ?? 0} 篇` +
-        `（sitemap 共 ${webResults.find((r) => r.site === "openai")?.totalDiscovered ?? 0} 条）\n\n` +
-        `---\n\n` +
-        webSummary +
-        footer;
+      const anthropicNew = webResults.find((r) => r.site === "anthropic")?.newItems.length ?? 0;
+      const anthropicTotal = webResults.find((r) => r.site === "anthropic")?.totalDiscovered ?? 0;
+      const openaiNew = webResults.find((r) => r.site === "openai")?.newItems.length ?? 0;
+      const openaiTotal = webResults.find((r) => r.site === "openai")?.totalDiscovered ?? 0;
 
-      console.log(`  Saved ${saveFile(webContent, dateStr, "ai-web.md")}`);
+      const fileName = lang === "en" ? "ai-web-en.md" : "ai-web.md";
 
-      if (digestRepo) {
+      let webContent: string;
+      if (lang === "en") {
+        const mode = isFirstRun ? "First full crawl" : "Today's update";
+        webContent =
+          `# Official AI Content Report ${dateStr}\n\n` +
+          `> ${mode} | New content: ${totalNew} articles | Generated: ${utcStr} UTC\n\n` +
+          `Sources:\n` +
+          `- Anthropic: [anthropic.com](https://www.anthropic.com) — ` +
+          `${anthropicNew} new articles (sitemap total: ${anthropicTotal})\n` +
+          `- OpenAI: [openai.com](https://openai.com) — ` +
+          `${openaiNew} new articles (sitemap total: ${openaiTotal})\n\n` +
+          `---\n\n` +
+          webSummary +
+          footer;
+      } else {
+        const mode = isFirstRun ? "首次全量" : "今日更新";
+        webContent =
+          `# AI 官方内容追踪报告 ${dateStr}\n\n` +
+          `> ${mode} | 新增内容: ${totalNew} 篇 | 生成时间: ${utcStr} UTC\n\n` +
+          `数据来源:\n` +
+          `- Anthropic: [anthropic.com](https://www.anthropic.com) — ` +
+          `新增 ${anthropicNew} 篇（sitemap 共 ${anthropicTotal} 条）\n` +
+          `- OpenAI: [openai.com](https://openai.com) — ` +
+          `新增 ${openaiNew} 篇（sitemap 共 ${openaiTotal} 条）\n\n` +
+          `---\n\n` +
+          webSummary +
+          footer;
+      }
+
+      console.log(`  Saved ${saveFile(webContent, dateStr, fileName)}`);
+
+      if (digestRepo && lang === "zh") {
         const webUrl = await createGitHubIssue(
           `🌐 AI 官方内容追踪报告 ${dateStr}${isFirstRun ? "（首次全量）" : ""}`,
           webContent,
@@ -396,14 +446,16 @@ async function saveWebReport(
         console.log(`  Created web issue: ${webUrl}`);
       }
     } catch (err) {
-      console.error(`  [web] Report generation failed: ${err}`);
+      console.error(`  [web/${lang}] Report generation failed: ${err}`);
     }
   } else {
-    console.log("  [web] No new content detected, skipping report.");
+    console.log(`  [web/${lang}] No new content detected, skipping report.`);
   }
 
-  saveWebState(webState);
-  console.log("  [web] State saved.");
+  if (lang === "zh") {
+    saveWebState(webState);
+    console.log("  [web] State saved.");
+  }
 }
 
 async function saveTrendingReport(
@@ -413,23 +465,25 @@ async function saveTrendingReport(
   dateStr: string,
   digestRepo: string,
   footer: string,
+  lang: "zh" | "en" = "zh",
 ): Promise<void> {
   const hasData = trendingData.trendingRepos.length > 0 || trendingData.searchRepos.length > 0;
   if (!hasData) {
-    console.log("  [trending] No data available, skipping report.");
+    console.log(`  [trending/${lang}] No data available, skipping report.`);
     return;
   }
 
-  const trendingContent =
-    `# AI 开源趋势日报 ${dateStr}\n\n` +
-    `> 数据来源: GitHub Trending + GitHub Search API | 生成时间: ${utcStr} UTC\n\n` +
-    `---\n\n` +
-    trendingSummary +
-    footer;
+  const fileName = lang === "en" ? "ai-trending-en.md" : "ai-trending.md";
+  const header =
+    lang === "en"
+      ? `# AI Open Source Trends ${dateStr}\n\n> Sources: GitHub Trending + GitHub Search API | Generated: ${utcStr} UTC\n\n---\n\n`
+      : `# AI 开源趋势日报 ${dateStr}\n\n> 数据来源: GitHub Trending + GitHub Search API | 生成时间: ${utcStr} UTC\n\n---\n\n`;
 
-  console.log(`  Saved ${saveFile(trendingContent, dateStr, "ai-trending.md")}`);
+  const trendingContent = header + trendingSummary + footer;
 
-  if (digestRepo) {
+  console.log(`  Saved ${saveFile(trendingContent, dateStr, fileName)}`);
+
+  if (digestRepo && lang === "zh") {
     const trendingUrl = await createGitHubIssue(`📈 AI 开源趋势日报 ${dateStr}`, trendingContent, "trending");
     console.log(`  Created trending issue: ${trendingUrl}`);
   }
@@ -441,31 +495,38 @@ async function saveHnReport(
   dateStr: string,
   digestRepo: string,
   footer: string,
+  lang: "zh" | "en" = "zh",
 ): Promise<void> {
   if (!hnData.fetchSuccess) {
-    console.log("  [hn] No data available, skipping report.");
+    console.log(`  [hn/${lang}] No data available, skipping report.`);
     return;
   }
 
-  console.log("  [hn] Calling LLM for HN report...");
+  console.log(`  [hn/${lang}] Calling LLM for HN report...`);
   try {
-    const hnSummary = await callLlm(buildHnPrompt(hnData, dateStr));
-    const hnContent =
-      `# Hacker News AI 社区动态日报 ${dateStr}\n\n` +
-      `> 数据来源: [Hacker News](https://news.ycombinator.com/) | ` +
-      `共 ${hnData.stories.length} 条 | 生成时间: ${utcStr} UTC\n\n` +
-      `---\n\n` +
-      hnSummary +
-      footer;
+    const hnSummary = await callLlm(buildHnPrompt(hnData, dateStr, lang));
+    const fileName = lang === "en" ? "ai-hn-en.md" : "ai-hn.md";
+    const header =
+      lang === "en"
+        ? `# Hacker News AI Community Digest ${dateStr}\n\n` +
+          `> Source: [Hacker News](https://news.ycombinator.com/) | ` +
+          `${hnData.stories.length} stories | Generated: ${utcStr} UTC\n\n` +
+          `---\n\n`
+        : `# Hacker News AI 社区动态日报 ${dateStr}\n\n` +
+          `> 数据来源: [Hacker News](https://news.ycombinator.com/) | ` +
+          `共 ${hnData.stories.length} 条 | 生成时间: ${utcStr} UTC\n\n` +
+          `---\n\n`;
 
-    console.log(`  Saved ${saveFile(hnContent, dateStr, "ai-hn.md")}`);
+    const hnContent = header + hnSummary + footer;
 
-    if (digestRepo) {
+    console.log(`  Saved ${saveFile(hnContent, dateStr, fileName)}`);
+
+    if (digestRepo && lang === "zh") {
       const hnUrl = await createGitHubIssue(`📰 Hacker News AI 社区动态日报 ${dateStr}`, hnContent, "hn");
       console.log(`  Created HN issue: ${hnUrl}`);
     }
   } catch (err) {
-    console.error(`  [hn] Report generation failed: ${err}`);
+    console.error(`  [hn/${lang}] Report generation failed: ${err}`);
   }
 }
 
@@ -496,55 +557,75 @@ async function main(): Promise<void> {
   const fetchedOpenclaw = fetched.find((f) => f.cfg.id === OPENCLAW.id)!;
   const fetchedPeers = fetched.filter((f) => peerIds.has(f.cfg.id));
 
-  // 2. Generate per-repo LLM summaries in parallel
-  const { cliDigests, openclawSummary, skillsSummary, peerDigests, trendingSummary } =
-    await generateSummaries(fetchedCli, fetchedOpenclaw, skillsData, fetchedPeers, trendingData, dateStr);
+  // 2. Generate per-repo LLM summaries in parallel (zh + en simultaneously)
+  console.log("  Generating summaries in ZH and EN in parallel...");
+  const [zhSummaries, enSummaries] = await Promise.all([
+    generateSummaries(fetchedCli, fetchedOpenclaw, skillsData, fetchedPeers, trendingData, dateStr, "zh"),
+    generateSummaries(fetchedCli, fetchedOpenclaw, skillsData, fetchedPeers, trendingData, dateStr, "en"),
+  ]);
 
-  // 3. Generate cross-repo comparisons in parallel
-  console.log("  Calling LLM for CLI comparative analysis + peers comparison...");
+  // 3. Generate cross-repo comparisons in parallel (zh + en)
+  console.log("  Calling LLM for comparative analyses (ZH + EN)...");
   const openclawDigest: RepoDigest = {
     config: OPENCLAW,
     issues: fetchedOpenclaw.issues,
     prs: fetchedOpenclaw.prs,
     releases: fetchedOpenclaw.releases,
-    summary: openclawSummary,
+    summary: zhSummaries.openclawSummary,
   };
-  const [comparison, peersComparison] = await Promise.all([
-    callLlm(buildComparisonPrompt(cliDigests, dateStr)),
-    callLlm(buildPeersComparisonPrompt(openclawDigest, peerDigests, dateStr)),
+  const enOpenclawDigest: RepoDigest = {
+    config: OPENCLAW,
+    issues: fetchedOpenclaw.issues,
+    prs: fetchedOpenclaw.prs,
+    releases: fetchedOpenclaw.releases,
+    summary: enSummaries.openclawSummary,
+  };
+  const [comparison, peersComparison, enComparison, enPeersComparison] = await Promise.all([
+    callLlm(buildComparisonPrompt(zhSummaries.cliDigests, dateStr, "zh")),
+    callLlm(buildPeersComparisonPrompt(openclawDigest, zhSummaries.peerDigests, dateStr, "zh")),
+    callLlm(buildComparisonPrompt(enSummaries.cliDigests, dateStr, "en")),
+    callLlm(buildPeersComparisonPrompt(enOpenclawDigest, enSummaries.peerDigests, dateStr, "en")),
   ]);
 
-  const footer = autoGenFooter();
+  const footer = autoGenFooter("zh");
+  const enFooter = autoGenFooter("en");
 
   // 4. Build + save all reports
-  const digestContent = buildCliReportContent(cliDigests, skillsSummary, comparison, utcStr, dateStr, footer);
+  const digestContent = buildCliReportContent(
+    zhSummaries.cliDigests, zhSummaries.skillsSummary, comparison, utcStr, dateStr, footer, "zh",
+  );
   const openclawContent = buildOpenclawReportContent(
-    fetchedOpenclaw,
-    peerDigests,
-    openclawSummary,
-    peersComparison,
-    utcStr,
-    dateStr,
-    footer,
+    fetchedOpenclaw, zhSummaries.peerDigests, zhSummaries.openclawSummary, peersComparison, utcStr, dateStr, footer, "zh",
+  );
+  const enDigestContent = buildCliReportContent(
+    enSummaries.cliDigests, enSummaries.skillsSummary, enComparison, utcStr, dateStr, enFooter, "en",
+  );
+  const enOpenclawContent = buildOpenclawReportContent(
+    fetchedOpenclaw, enSummaries.peerDigests, enSummaries.openclawSummary, enPeersComparison, utcStr, dateStr, enFooter, "en",
   );
 
   console.log(`  Saved ${saveFile(digestContent, dateStr, "ai-cli.md")}`);
   console.log(`  Saved ${saveFile(openclawContent, dateStr, "ai-agents.md")}`);
+  console.log(`  Saved ${saveFile(enDigestContent, dateStr, "ai-cli-en.md")}`);
+  console.log(`  Saved ${saveFile(enOpenclawContent, dateStr, "ai-agents-en.md")}`);
 
-  await saveWebReport(webResults, webState, utcStr, dateStr, digestRepo, footer);
-  await saveTrendingReport(trendingData, trendingSummary, utcStr, dateStr, digestRepo, footer);
-  await saveHnReport(hnData, utcStr, dateStr, digestRepo, footer);
+  // Web report: zh saves state, en skips state save
+  await saveWebReport(webResults, webState, utcStr, dateStr, digestRepo, footer, "zh");
+  await saveWebReport(webResults, webState, utcStr, dateStr, digestRepo, enFooter, "en");
 
-  // 5. Create GitHub issues for CLI + OpenClaw
+  await Promise.all([
+    saveTrendingReport(trendingData, zhSummaries.trendingSummary, utcStr, dateStr, digestRepo, footer, "zh"),
+    saveTrendingReport(trendingData, enSummaries.trendingSummary, utcStr, dateStr, digestRepo, enFooter, "en"),
+    saveHnReport(hnData, utcStr, dateStr, digestRepo, footer, "zh"),
+    saveHnReport(hnData, utcStr, dateStr, digestRepo, enFooter, "en"),
+  ]);
+
+  // 5. Create GitHub issues for CLI + OpenClaw (zh only)
   if (digestRepo) {
     const cliUrl = await createGitHubIssue(`📊 AI CLI 工具社区动态日报 ${dateStr}`, digestContent, "digest");
     console.log(`  Created CLI issue: ${cliUrl}`);
 
-    const openclawUrl = await createGitHubIssue(
-      `🦞 OpenClaw 生态日报 ${dateStr}`,
-      openclawContent,
-      "openclaw",
-    );
+    const openclawUrl = await createGitHubIssue(`🦞 OpenClaw 生态日报 ${dateStr}`, openclawContent, "openclaw");
     console.log(`  Created OpenClaw issue: ${openclawUrl}`);
   }
 
