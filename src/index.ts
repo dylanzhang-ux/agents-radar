@@ -313,6 +313,25 @@ async function main(): Promise<void> {
     lobstersData,
   } = await fetchAllData(since, webState);
 
+  // ---- Alpha Hunter: export raw signals ----
+  const rawSignals = {
+    date: dateStr,
+    fetchedAt: now.toISOString(),
+    trending: trendingData,
+    hn: hnData,
+    ph: phData,
+    arxiv: arxivData,
+    hf: hfData,
+    devto: devtoData,
+    lobsters: lobstersData,
+  };
+  const rawDir = path.join("digests", dateStr);
+  fs.mkdirSync(rawDir, { recursive: true });
+  const rawPath = path.join(rawDir, "raw-signals.json");
+  fs.writeFileSync(rawPath, JSON.stringify(rawSignals, null, 2));
+  console.log(`  Saved raw signals: ${rawPath}`);
+  // ---- End Alpha Hunter ----
+
   const peerIds = new Set(OPENCLAW_PEERS.map((p) => p.id));
   const fetchedCli = fetched.filter((f) => f.cfg.id !== OPENCLAW.id && !peerIds.has(f.cfg.id));
   const fetchedOpenclaw = fetched.find((f) => f.cfg.id === OPENCLAW.id)!;
